@@ -1,0 +1,722 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Blind Number Rush | سباق الأرقام المخفية</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts: Cairo -->
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;800&display=swap" rel="stylesheet">
+    
+    <!-- Firebase SDKs (Compat versions for global usage) -->
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+
+    <style>
+        :root {
+            --glass-bg: rgba(255, 255, 255, 0.15);
+            --glass-border: rgba(255, 255, 255, 0.2);
+            --primary-glow: rgba(124, 58, 237, 0.5);
+        }
+
+        body {
+            font-family: 'Cairo', sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #4a1c40 100%);
+            color: white;
+            min-height: 100vh;
+            overflow-x: hidden;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        /* Floating Background Animation */
+        .bg-orb {
+            position: absolute;
+            border-radius: 50%;
+            filter: blur(80px);
+            z-index: -1;
+            animation: float 20s infinite ease-in-out;
+        }
+        .orb-1 { top: -10%; left: -10%; width: 50vw; height: 50vw; background: rgba(88, 28, 135, 0.4); }
+        .orb-2 { bottom: -10%; right: -10%; width: 60vw; height: 60vw; background: rgba(219, 39, 119, 0.3); animation-delay: -5s; }
+        .orb-3 { top: 40%; left: 40%; width: 30vw; height: 30vw; background: rgba(59, 130, 246, 0.3); animation-delay: -10s; }
+
+        @keyframes float {
+            0%, 100% { transform: translate(0, 0); }
+            33% { transform: translate(30px, -50px); }
+            66% { transform: translate(-20px, 20px); }
+        }
+
+        /* Glassmorphism Card */
+        .glass-card {
+            background: var(--glass-bg);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid var(--glass-border);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+        }
+
+        /* Grid Items */
+        .game-tile {
+            transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            transform-style: preserve-3d;
+        }
+        .game-tile:active { transform: scale(0.9); }
+        .game-tile.revealed { background: rgba(255, 255, 255, 0.9); color: #1a1a2e; transform: rotateY(180deg); }
+        .game-tile.wrong { animation: shake 0.5s; background: #ef4444 !important; border-color: #ef4444; }
+        .game-tile.correct { background: #10b981 !important; border-color: #10b981; box-shadow: 0 0 20px #10b981; }
+
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-10px); }
+            75% { transform: translateX(10px); }
+        }
+
+        @keyframes pop {
+            0% { transform: scale(0); opacity: 0; }
+            80% { transform: scale(1.1); opacity: 1; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+
+        .pop-in { animation: pop 0.4s forwards; }
+
+        /* Loader */
+        .loader {
+            border: 4px solid rgba(255, 255, 255, 0.1);
+            border-left-color: #ffffff;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+
+        /* Confetti Canvas */
+        #confetti {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; z-index: 50; display: none;
+        }
+    </style>
+</head>
+<body class="flex items-center justify-center p-4">
+
+    <!-- Background Orbs -->
+    <div class="bg-orb orb-1"></div>
+    <div class="bg-orb orb-2"></div>
+    <div class="bg-orb orb-3"></div>
+
+    <!-- Canvas for Confetti -->
+    <canvas id="confetti"></canvas>
+
+    <!-- Main App Container -->
+    <main id="app" class="w-full max-w-md relative">
+        
+        <!-- Header -->
+        <header class="text-center mb-6">
+            <h1 class="text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-pink-400 drop-shadow-sm mb-1">
+                Blind Rush
+            </h1>
+            <p class="text-gray-300 text-sm opacity-80">هل ذاكرتك قوية بما يكفي؟</p>
+        </header>
+
+        <!-- View: Login (Nickname) -->
+        <section id="view-login" class="glass-card rounded-3xl p-8 pop-in">
+            <div class="space-y-6">
+                <div>
+                    <label class="block text-gray-300 text-sm mb-2 font-bold">اسم اللاعب (Nickname)</label>
+                    <input type="text" id="nicknameInput" class="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-purple-500 transition text-center text-lg placeholder-gray-500" placeholder="أدخل اسمك هنا...">
+                </div>
+                
+                <div class="grid grid-cols-2 gap-4">
+                    <button id="btnCreate" onclick="app.createRoom()" class="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold py-3 px-4 rounded-xl shadow-lg transform transition active:scale-95 flex flex-col items-center justify-center gap-1">
+                        <span class="text-xl">🏠</span>
+                        <span>إنشاء غرفة</span>
+                    </button>
+                    <button onclick="app.showJoinInput()" class="bg-white/10 hover:bg-white/20 border border-white/20 text-white font-bold py-3 px-4 rounded-xl shadow-lg transform transition active:scale-95 flex flex-col items-center justify-center gap-1">
+                        <span class="text-xl">🚪</span>
+                        <span>دخول غرفة</span>
+                    </button>
+                </div>
+
+                <!-- Hidden Join Input -->
+                <div id="joinSection" class="hidden mt-4 pt-4 border-t border-white/10">
+                    <input type="number" id="roomCodeInput" class="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white text-center tracking-widest text-xl mb-3" placeholder="رمز الغرفة (1234)">
+                    <button onclick="app.joinRoom()" class="w-full bg-pink-600 hover:bg-pink-500 text-white font-bold py-3 rounded-xl shadow-lg transition">انضمام الآن</button>
+                </div>
+            </div>
+            <div id="authStatus" class="text-center text-xs text-gray-400 mt-4 h-4">جاري الاتصال بالسيرفر...</div>
+        </section>
+
+        <!-- View: Lobby -->
+        <section id="view-lobby" class="glass-card rounded-3xl p-6 hidden">
+            <div class="text-center mb-6">
+                <p class="text-gray-400 text-sm">رمز الغرفة</p>
+                <div id="displayRoomCode" class="text-5xl font-mono font-bold text-white tracking-widest my-2 select-all cursor-pointer" onclick="app.copyCode()">----</div>
+                <p class="text-xs text-green-400" id="copyMsg">اضغط للنسخ</p>
+            </div>
+
+            <div class="bg-black/20 rounded-xl p-4 mb-6 min-h-[150px]">
+                <h3 class="text-gray-300 text-sm mb-3 flex justify-between">
+                    <span>اللاعبون المتصلون</span>
+                    <span id="playerCount">0</span>
+                </h3>
+                <div id="lobbyPlayersList" class="space-y-2">
+                    <!-- Players rendered here -->
+                </div>
+            </div>
+
+            <button id="btnStartGame" onclick="app.startGame()" class="w-full bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-400 hover:to-emerald-500 text-white font-bold py-4 rounded-xl shadow-lg transform transition active:scale-95 text-lg hidden">
+                🎮 ابدأ اللعبة
+            </button>
+            <p id="waitingMsg" class="text-center text-gray-400 animate-pulse text-sm mt-4">بانتظار القائد لبدء اللعبة...</p>
+        </section>
+
+        <!-- View: Game -->
+        <section id="view-game" class="hidden w-full">
+            
+            <!-- Leaderboard / Progress -->
+            <div class="glass-card rounded-2xl p-4 mb-4">
+                <div id="gameProgressList" class="space-y-3">
+                    <!-- Progress bars here -->
+                </div>
+            </div>
+
+            <!-- Game Board -->
+            <div class="glass-card rounded-3xl p-4 relative overflow-hidden">
+                <div class="flex justify-between items-center mb-4 px-2">
+                    <div class="text-left">
+                        <span class="block text-xs text-gray-400">الهدف الحالي</span>
+                        <span id="currentTarget" class="text-3xl font-bold text-yellow-400">1</span>
+                    </div>
+                    <div class="text-right">
+                        <span class="block text-xs text-gray-400">الوقت</span>
+                        <span id="gameTimer" class="text-xl font-mono">00:00</span>
+                    </div>
+                </div>
+
+                <!-- Grid -->
+                <div id="gameGrid" class="grid grid-cols-3 gap-3">
+                    <!-- Tiles Generated by JS -->
+                </div>
+            </div>
+        </section>
+
+        <!-- View: Game Over -->
+        <section id="view-result" class="glass-card rounded-3xl p-8 hidden text-center pop-in">
+            <div class="text-6xl mb-4">🏆</div>
+            <h2 class="text-3xl font-bold text-white mb-2">انتهت اللعبة!</h2>
+            <p class="text-gray-300 mb-6">والفائز هو:</p>
+            
+            <div class="bg-gradient-to-r from-yellow-600/50 to-yellow-800/50 border border-yellow-500/50 p-6 rounded-2xl mb-8">
+                <h3 id="winnerName" class="text-4xl font-bold text-yellow-300 shadow-yellow-500/50 drop-shadow-lg">---</h3>
+            </div>
+
+            <button onclick="location.reload()" class="w-full bg-white/10 hover:bg-white/20 border border-white/20 text-white font-bold py-3 rounded-xl transition">
+                خروج / لعبة جديدة
+            </button>
+        </section>
+
+        <!-- Notification Toast -->
+        <div id="toast" class="fixed bottom-10 left-1/2 transform -translate-x-1/2 bg-gray-800 text-white px-6 py-3 rounded-full shadow-2xl opacity-0 pointer-events-none transition duration-300 z-50 text-sm w-max max-w-xs text-center">
+            رسالة
+        </div>
+
+    </main>
+
+    <script type="module">
+        // --- 1. Audio System (Web Audio API) ---
+        class AudioSynth {
+            constructor() {
+                this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+
+            playTone(freq, type, duration, vol = 0.1) {
+                if (this.ctx.state === 'suspended') this.ctx.resume();
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = type;
+                osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
+                gain.gain.setValueAtTime(vol, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + duration);
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                osc.start();
+                osc.stop(this.ctx.currentTime + duration);
+            }
+
+            click() { this.playTone(600, 'sine', 0.1, 0.05); }
+            error() { 
+                this.playTone(150, 'sawtooth', 0.4, 0.2); 
+                setTimeout(() => this.playTone(100, 'sawtooth', 0.4, 0.2), 100);
+            }
+            success() { 
+                this.playTone(800, 'sine', 0.1, 0.1);
+                setTimeout(() => this.playTone(1200, 'sine', 0.2, 0.1), 100);
+            }
+            win() {
+                [400, 500, 600, 800, 1000].forEach((f, i) => setTimeout(() => this.playTone(f, 'square', 0.2, 0.1), i * 150));
+            }
+        }
+        const sfx = new AudioSynth();
+
+        // --- 2. Firebase Setup ---
+        // Auto-detect config: Use environment config if available (for stability), else use hardcoded user config.
+        let firebaseConfig;
+        if (typeof __firebase_config !== 'undefined') {
+            firebaseConfig = JSON.parse(__firebase_config);
+        } else {
+            // Fallback to user provided config if environment is missing
+            firebaseConfig = {
+                apiKey: "AIzaSyD6MRZ7d7J1333erYoBrUGqocJNdGNjB7w",
+                authDomain: "neew-aec2b.firebaseapp.com",
+                databaseURL: "https://neew-aec2b-default-rtdb.firebaseio.com",
+                projectId: "neew-aec2b",
+                storageBucket: "neew-aec2b.firebasestorage.app",
+                messagingSenderId: "70112873200",
+                appId: "1:70112873200:web:b8ef2b3863be6f1bf39035"
+            };
+        }
+
+        // Initialize Firebase
+        try {
+            if (!firebase.apps.length) {
+                firebase.initializeApp(firebaseConfig);
+            }
+        } catch(e) {
+            console.warn("Firebase initialization warning:", e);
+        }
+        
+        const app = firebase.app(); // Get the initialized app
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+        
+        // Use projectId as appId if default is not available
+        const appId = typeof __app_id !== 'undefined' ? __app_id : firebaseConfig.projectId;
+
+        // --- 3. Game Logic & State ---
+        const state = {
+            user: null,
+            room: null,
+            roomId: null,
+            isHost: false,
+            grid: [], // Local randomized grid
+            target: 1, // Local target
+            maxTarget: 10,
+            startTime: null
+        };
+
+        // --- 4. Auth & Helper Functions ---
+        async function initAuth() {
+            try {
+                // Try Custom Token first (Preferred for this environment)
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    try {
+                        await auth.signInWithCustomToken(__initial_auth_token);
+                    } catch (tokenError) {
+                        console.warn("Custom token failed (likely config mismatch), falling back to anonymous:", tokenError);
+                        // Fallback: If custom token fails (mismatch), try anonymous
+                        await auth.signInAnonymously();
+                    }
+                } else {
+                    await auth.signInAnonymously();
+                }
+            } catch (error) {
+                console.error("Auth Error:", error);
+                showToast("مشكلة في الاتصال: " + error.code);
+                document.getElementById('authStatus').innerText = "فشل الاتصال: " + error.code;
+                document.getElementById('authStatus').classList.add('text-red-500');
+            }
+        }
+        
+        auth.onAuthStateChanged((u) => {
+            if (u) {
+                state.user = u;
+                document.getElementById('authStatus').innerText = "تم الاتصال بنجاح ✅";
+                document.getElementById('authStatus').classList.replace('text-gray-400', 'text-green-400');
+            } else {
+                state.user = null;
+                document.getElementById('authStatus').innerText = "غير متصل";
+            }
+        });
+        
+        initAuth();
+
+        function showToast(msg) {
+            const t = document.getElementById('toast');
+            t.textContent = msg;
+            t.classList.remove('opacity-0', 'translate-y-4');
+            setTimeout(() => t.classList.add('opacity-0', 'translate-y-4'), 4000);
+        }
+
+        function switchView(viewId) {
+            ['view-login', 'view-lobby', 'view-game', 'view-result'].forEach(id => {
+                document.getElementById(id).classList.add('hidden');
+            });
+            document.getElementById(viewId).classList.remove('hidden');
+        }
+
+        // --- 5. Game Core Functions ---
+        
+        window.app = {
+            showJoinInput: () => {
+                document.getElementById('joinSection').classList.remove('hidden');
+            },
+
+            copyCode: () => {
+                const code = document.getElementById('displayRoomCode').innerText;
+                
+                // Fallback using legacy execCommand for iframe permissions
+                const tempInput = document.createElement("textarea");
+                tempInput.value = code;
+                document.body.appendChild(tempInput);
+                tempInput.select();
+                try {
+                    document.execCommand("copy");
+                    showToast("تم نسخ الرمز!");
+                } catch (e) {
+                    showToast("فشل النسخ تلقائياً");
+                }
+                document.body.removeChild(tempInput);
+            },
+
+            createRoom: async () => {
+                const btn = document.getElementById('btnCreate');
+                
+                const nick = document.getElementById('nicknameInput').value.trim();
+                if (!nick) return showToast("الرجاء إدخال اسمك!");
+                
+                if (!state.user) {
+                    showToast("جاري إعادة محاولة الاتصال...");
+                    await initAuth();
+                    if(!state.user) return showToast("فشل الاتصال. تأكد من إعدادات Firebase.");
+                }
+
+                // Show loading
+                const originalText = btn.innerHTML;
+                btn.innerHTML = `<span class="loader w-6 h-6 border-2"></span>`;
+                btn.disabled = true;
+
+                const roomId = Math.floor(1000 + Math.random() * 9000).toString();
+                const roomRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('rooms').doc(roomId);
+
+                try {
+                    await roomRef.set({
+                        status: 'WAITING',
+                        host: state.user.uid,
+                        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+                        winner: null,
+                        players: {
+                            [state.user.uid]: {
+                                name: nick,
+                                progress: 0,
+                                finished: false,
+                                avatar: '🤠'
+                            }
+                        }
+                    });
+                    
+                    state.roomId = roomId;
+                    state.isHost = true;
+                    subscribeToRoom();
+                } catch (e) {
+                    console.error("Create Room Error:", e);
+                    showToast("خطأ: " + (e.code || e.message));
+                    
+                    // Reset button
+                    btn.innerHTML = originalText;
+                    btn.disabled = false;
+                }
+            },
+
+            joinRoom: async () => {
+                const nick = document.getElementById('nicknameInput').value.trim();
+                const code = document.getElementById('roomCodeInput').value.trim();
+                if (!nick || !code) return showToast("أدخل الاسم ورمز الغرفة");
+                if (!state.user) await initAuth();
+
+                const roomRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('rooms').doc(code);
+                
+                try {
+                    const doc = await roomRef.get();
+                    if (!doc.exists) return showToast("الغرفة غير موجودة");
+                    const data = doc.data();
+                    if (data.status !== 'WAITING') return showToast("اللعبة بدأت بالفعل");
+
+                    // Add player
+                    await roomRef.update({
+                        [`players.${state.user.uid}`]: {
+                            name: nick,
+                            progress: 0,
+                            finished: false,
+                            avatar: '👽'
+                        }
+                    });
+
+                    state.roomId = code;
+                    state.isHost = false;
+                    subscribeToRoom();
+                } catch (e) {
+                    console.error("Join Error:", e);
+                    showToast("خطأ: " + (e.code || e.message));
+                }
+            },
+
+            startGame: async () => {
+                if (!state.isHost) return;
+                const roomRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('rooms').doc(state.roomId);
+                await roomRef.update({
+                    status: 'PLAYING',
+                    startTime: Date.now()
+                });
+            }
+        };
+
+        // --- 6. Room Logic & Subscriptions ---
+
+        function subscribeToRoom() {
+            const roomRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('rooms').doc(state.roomId);
+            
+            roomRef.onSnapshot((doc) => {
+                if (!doc.exists) return location.reload();
+                const data = doc.data();
+                state.room = data;
+
+                if (data.status === 'WAITING') renderLobby(data);
+                if (data.status === 'PLAYING') {
+                    if (document.getElementById('view-game').classList.contains('hidden')) {
+                        initGameLocal();
+                    }
+                    renderGameStats(data);
+                }
+                if (data.status === 'FINISHED') renderResult(data);
+            }, (err) => {
+                console.error(err);
+                showToast("فقد الاتصال: " + err.code);
+            });
+        }
+
+        function renderLobby(data) {
+            switchView('view-lobby');
+            document.getElementById('displayRoomCode').textContent = state.roomId;
+            const players = Object.values(data.players || {});
+            document.getElementById('playerCount').textContent = players.length;
+            
+            const list = document.getElementById('lobbyPlayersList');
+            list.innerHTML = players.map(p => `
+                <div class="flex items-center gap-3 bg-white/5 p-2 rounded-lg">
+                    <span class="text-2xl">${p.avatar}</span>
+                    <span class="font-bold">${p.name}</span>
+                </div>
+            `).join('');
+
+            // Only host sees start button
+            if (state.isHost) {
+                document.getElementById('btnStartGame').classList.remove('hidden');
+                document.getElementById('waitingMsg').classList.add('hidden');
+            }
+        }
+
+        // --- 7. Local Game Mechanics ---
+
+        function initGameLocal() {
+            switchView('view-game');
+            state.target = 1;
+            
+            // Generate randomized grid 1-12 (some dummies if needed, but we do 1-10 + 2 empties/traps if desired, let's do 1-12 grid with 1-10 numbers)
+            // Let's stick to 12 tiles: 1-10 numbers, 2 traps (reset).
+            let numbers = Array.from({length: 10}, (_, i) => i + 1);
+            // Add 2 traps (-1)
+            numbers.push(-1, -1);
+            
+            // Fisher-Yates Shuffle
+            for (let i = numbers.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [numbers[i], numbers[j]] = [numbers[j], numbers[i]];
+            }
+            state.grid = numbers;
+
+            renderGrid();
+            startTimer(Date.now()); // Using local time for simplicity visually
+        }
+
+        function renderGrid() {
+            const gridEl = document.getElementById('gameGrid');
+            gridEl.innerHTML = '';
+            
+            state.grid.forEach((num, index) => {
+                const btn = document.createElement('button');
+                btn.className = 'game-tile bg-white/10 border border-white/20 rounded-xl h-24 flex items-center justify-center text-3xl font-bold cursor-pointer relative overflow-hidden';
+                btn.onclick = () => handleTileClick(btn, num, index);
+                
+                // Front (Hidden)
+                const front = document.createElement('div');
+                front.className = 'absolute inset-0 flex items-center justify-center bg-gradient-to-br from-purple-900/80 to-blue-900/80';
+                front.innerHTML = `<span class="opacity-50 text-sm">?</span>`;
+                
+                // Back (Number) - initially hidden by CSS logic or just injected
+                // For simplicity in Vanilla JS without complex 3D CSS toggling classes manually:
+                btn.dataset.val = num;
+                btn.dataset.idx = index;
+                
+                gridEl.appendChild(btn);
+            });
+        }
+
+        function handleTileClick(btn, num, index) {
+            // Prevent clicking if already revealed or game over
+            if (btn.classList.contains('revealed')) return;
+
+            sfx.click();
+            
+            // Reveal animation
+            btn.classList.add('revealed');
+            
+            // Logic
+            setTimeout(async () => {
+                if (num === state.target) {
+                    // Correct!
+                    sfx.success();
+                    btn.classList.add('correct');
+                    btn.innerText = num; // Show number
+                    state.target++;
+                    document.getElementById('currentTarget').innerText = state.target;
+                    
+                    // Update Firebase
+                    await updateProgress(state.target - 1);
+
+                    // Check Win
+                    if (state.target > state.maxTarget) {
+                        handleWin();
+                    }
+
+                } else {
+                    // Wrong!
+                    sfx.error();
+                    btn.innerText = (num === -1) ? "💣" : num;
+                    btn.classList.add('wrong');
+                    
+                    // Punishment: Reset
+                    showToast("خطأ! العودة للصفر");
+                    
+                    setTimeout(async () => {
+                        // Reset local state
+                        state.target = 1;
+                        document.getElementById('currentTarget').innerText = 1;
+                        
+                        // Hide all tiles again
+                        document.querySelectorAll('.game-tile').forEach(t => {
+                            t.className = 'game-tile bg-white/10 border border-white/20 rounded-xl h-24 flex items-center justify-center text-3xl font-bold cursor-pointer relative overflow-hidden';
+                            t.innerText = '';
+                            const front = document.createElement('div');
+                            front.className = 'absolute inset-0 flex items-center justify-center bg-gradient-to-br from-purple-900/80 to-blue-900/80';
+                            front.innerHTML = `<span class="opacity-50 text-sm">?</span>`;
+                            t.appendChild(front);
+                        });
+
+                        // Re-shuffle to prevent memorizing positions (Hardcore mode!)
+                        // For this version, let's NOT reshuffle, just hide, so memory helps.
+                        
+                        await updateProgress(0);
+                    }, 800);
+                }
+            }, 150);
+        }
+
+        async function updateProgress(val) {
+            const roomRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('rooms').doc(state.roomId);
+            await roomRef.update({
+                [`players.${state.user.uid}.progress`]: val
+            });
+        }
+
+        async function handleWin() {
+            sfx.win();
+            // Confetti
+            startConfetti();
+            
+            const roomRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('rooms').doc(state.roomId);
+            // Set me as winner if no one else has won yet
+            if (!state.room.winner) {
+                await roomRef.update({
+                    status: 'FINISHED',
+                    winner: state.room.players[state.user.uid].name
+                });
+            }
+        }
+
+        function renderGameStats(data) {
+            // Render progress bars sorted by score
+            const players = Object.values(data.players).sort((a, b) => b.progress - a.progress);
+            const list = document.getElementById('gameProgressList');
+            
+            list.innerHTML = players.map(p => {
+                const percent = (p.progress / state.maxTarget) * 100;
+                const isMe = p.name === data.players[state.user.uid].name;
+                return `
+                    <div class="mb-2">
+                        <div class="flex justify-between text-xs mb-1">
+                            <span class="${isMe ? 'text-yellow-300 font-bold' : 'text-gray-300'}">${p.name} ${isMe ? '(أنت)' : ''}</span>
+                            <span>${p.progress}/10</span>
+                        </div>
+                        <div class="w-full bg-black/30 rounded-full h-2.5 overflow-hidden">
+                            <div class="bg-gradient-to-r from-purple-500 to-pink-500 h-2.5 rounded-full transition-all duration-500" style="width: ${percent}%"></div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function renderResult(data) {
+            switchView('view-result');
+            document.getElementById('winnerName').textContent = data.winner;
+            startConfetti();
+        }
+
+        function startTimer(startTime) {
+            setInterval(() => {
+                // simple elapsed timer
+                // In a real app, calculate based on server start time
+                const now = Date.now();
+                // This is just visual for the user
+            }, 1000);
+        }
+
+        // --- 8. Confetti Effect (Simple) ---
+        function startConfetti() {
+            const canvas = document.getElementById('confetti');
+            canvas.style.display = 'block';
+            const ctx = canvas.getContext('2d');
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+
+            const particles = [];
+            for(let i=0; i<100; i++) {
+                particles.push({
+                    x: Math.random() * canvas.width,
+                    y: Math.random() * canvas.height - canvas.height,
+                    vx: Math.random() * 2 - 1,
+                    vy: Math.random() * 3 + 2,
+                    color: `hsl(${Math.random()*360}, 100%, 50%)`
+                });
+            }
+
+            function animate() {
+                ctx.clearRect(0,0, canvas.width, canvas.height);
+                particles.forEach(p => {
+                    p.x += p.vx;
+                    p.y += p.vy;
+                    if(p.y > canvas.height) p.y = -10;
+                    ctx.fillStyle = p.color;
+                    ctx.fillRect(p.x, p.y, 5, 5);
+                });
+                requestAnimationFrame(animate);
+            }
+            animate();
+        }
+
+    </script>
+</body>
+</html>
