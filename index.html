@@ -2,7 +2,7 @@
 <html lang="ar" dir="rtl">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Blind Number Rush | سباق الأرقام المخفية</title>
     
     <!-- Tailwind CSS -->
@@ -30,6 +30,7 @@
             overflow-x: hidden;
             user-select: none;
             -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation; /* Improves touch response */
         }
 
         /* Floating Background Animation */
@@ -59,29 +60,82 @@
             box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
         }
 
-        /* Grid Items */
+        /* --- New Smoother Animations --- */
+        
         .game-tile {
-            transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            /* Using a spring-like bezier curve for bouncier interactions */
+            transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1), background-color 0.3s ease, box-shadow 0.3s ease;
             transform-style: preserve-3d;
+            touch-action: manipulation;
+            position: relative;
+            overflow: hidden; /* For ripple effect */
         }
-        .game-tile:active { transform: scale(0.9); }
-        .game-tile.revealed { background: rgba(255, 255, 255, 0.9); color: #1a1a2e; transform: rotateY(180deg); }
-        .game-tile.wrong { animation: shake 0.5s; background: #ef4444 !important; border-color: #ef4444; }
-        .game-tile.correct { background: #10b981 !important; border-color: #10b981; box-shadow: 0 0 20px #10b981; }
+        
+        .game-tile:active { 
+            transform: scale(0.92); /* Gentle press effect */
+        }
+        
+        .game-tile.revealed { 
+            background: rgba(255, 255, 255, 0.95); 
+            color: #1a1a2e; 
+            /* Rotate and slightly scale up for emphasis */
+            transform: rotateY(180deg) scale(1.02); 
+            box-shadow: 0 10px 25px rgba(0,0,0,0.25);
+        }
+
+        /* Improved Shake with rotation preservation */
+        .game-tile.wrong { 
+            animation: shake 0.5s cubic-bezier(.36,.07,.19,.97) both; 
+            background: #ef4444 !important; 
+            border-color: #ef4444; 
+        }
+
+        /* Pulse effect for correct answer */
+        .game-tile.correct { 
+            background: #10b981 !important; 
+            border-color: #10b981; 
+            box-shadow: 0 0 25px #10b981, 0 0 10px #fff; 
+            animation: pulse-success 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            z-index: 10;
+        }
+
+        /* Ripple Effect Styles */
+        .ripple {
+            position: absolute;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.5);
+            transform: scale(0);
+            animation: ripple-anim 0.5s linear;
+            pointer-events: none;
+        }
+
+        @keyframes ripple-anim {
+            to {
+                transform: scale(4);
+                opacity: 0;
+            }
+        }
 
         @keyframes shake {
-            0%, 100% { transform: translateX(0); }
-            25% { transform: translateX(-10px); }
-            75% { transform: translateX(10px); }
+            10%, 90% { transform: translate3d(-2px, 0, 0) rotateY(180deg); }
+            20%, 80% { transform: translate3d(4px, 0, 0) rotateY(180deg); }
+            30%, 50%, 70% { transform: translate3d(-8px, 0, 0) rotateY(180deg); }
+            40%, 60% { transform: translate3d(8px, 0, 0) rotateY(180deg); }
+        }
+
+        @keyframes pulse-success {
+            0% { transform: rotateY(180deg) scale(1.02); }
+            50% { transform: rotateY(180deg) scale(1.15); }
+            100% { transform: rotateY(180deg) scale(1); }
         }
 
         @keyframes pop {
             0% { transform: scale(0); opacity: 0; }
-            80% { transform: scale(1.1); opacity: 1; }
+            80% { transform: scale(1.05); opacity: 1; }
             100% { transform: scale(1); opacity: 1; }
         }
 
-        .pop-in { animation: pop 0.4s forwards; }
+        .pop-in { animation: pop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards; }
 
         /* Loader */
         .loader {
@@ -263,12 +317,11 @@
         const sfx = new AudioSynth();
 
         // --- 2. Firebase Setup ---
-        // Auto-detect config: Use environment config if available (for stability), else use hardcoded user config.
         let firebaseConfig;
         if (typeof __firebase_config !== 'undefined') {
             firebaseConfig = JSON.parse(__firebase_config);
         } else {
-            // Fallback to user provided config if environment is missing
+            // Fallback to user provided config
             firebaseConfig = {
                 apiKey: "AIzaSyD6MRZ7d7J1333erYoBrUGqocJNdGNjB7w",
                 authDomain: "neew-aec2b.firebaseapp.com",
@@ -280,7 +333,6 @@
             };
         }
 
-        // Initialize Firebase
         try {
             if (!firebase.apps.length) {
                 firebase.initializeApp(firebaseConfig);
@@ -289,11 +341,9 @@
             console.warn("Firebase initialization warning:", e);
         }
         
-        const app = firebase.app(); // Get the initialized app
+        const app = firebase.app();
         const auth = firebase.auth();
         const db = firebase.firestore();
-        
-        // Use projectId as appId if default is not available
         const appId = typeof __app_id !== 'undefined' ? __app_id : firebaseConfig.projectId;
 
         // --- 3. Game Logic & State ---
@@ -302,8 +352,8 @@
             room: null,
             roomId: null,
             isHost: false,
-            grid: [], // Local randomized grid
-            target: 1, // Local target
+            grid: [],
+            target: 1,
             maxTarget: 10,
             startTime: null
         };
@@ -311,13 +361,11 @@
         // --- 4. Auth & Helper Functions ---
         async function initAuth() {
             try {
-                // Try Custom Token first (Preferred for this environment)
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                     try {
                         await auth.signInWithCustomToken(__initial_auth_token);
                     } catch (tokenError) {
-                        console.warn("Custom token failed (likely config mismatch), falling back to anonymous:", tokenError);
-                        // Fallback: If custom token fails (mismatch), try anonymous
+                        console.warn("Custom token failed, falling back to anonymous:", tokenError);
                         await auth.signInAnonymously();
                     }
                 } else {
@@ -367,8 +415,6 @@
 
             copyCode: () => {
                 const code = document.getElementById('displayRoomCode').innerText;
-                
-                // Fallback using legacy execCommand for iframe permissions
                 const tempInput = document.createElement("textarea");
                 tempInput.value = code;
                 document.body.appendChild(tempInput);
@@ -384,7 +430,6 @@
 
             createRoom: async () => {
                 const btn = document.getElementById('btnCreate');
-                
                 const nick = document.getElementById('nicknameInput').value.trim();
                 if (!nick) return showToast("الرجاء إدخال اسمك!");
                 
@@ -394,7 +439,6 @@
                     if(!state.user) return showToast("فشل الاتصال. تأكد من إعدادات Firebase.");
                 }
 
-                // Show loading
                 const originalText = btn.innerHTML;
                 btn.innerHTML = `<span class="loader w-6 h-6 border-2"></span>`;
                 btn.disabled = true;
@@ -424,8 +468,6 @@
                 } catch (e) {
                     console.error("Create Room Error:", e);
                     showToast("خطأ: " + (e.code || e.message));
-                    
-                    // Reset button
                     btn.innerHTML = originalText;
                     btn.disabled = false;
                 }
@@ -445,7 +487,6 @@
                     const data = doc.data();
                     if (data.status !== 'WAITING') return showToast("اللعبة بدأت بالفعل");
 
-                    // Add player
                     await roomRef.update({
                         [`players.${state.user.uid}`]: {
                             name: nick,
@@ -512,7 +553,6 @@
                 </div>
             `).join('');
 
-            // Only host sees start button
             if (state.isHost) {
                 document.getElementById('btnStartGame').classList.remove('hidden');
                 document.getElementById('waitingMsg').classList.add('hidden');
@@ -525,13 +565,9 @@
             switchView('view-game');
             state.target = 1;
             
-            // Generate randomized grid 1-12 (some dummies if needed, but we do 1-10 + 2 empties/traps if desired, let's do 1-12 grid with 1-10 numbers)
-            // Let's stick to 12 tiles: 1-10 numbers, 2 traps (reset).
             let numbers = Array.from({length: 10}, (_, i) => i + 1);
-            // Add 2 traps (-1)
             numbers.push(-1, -1);
             
-            // Fisher-Yates Shuffle
             for (let i = numbers.length - 1; i > 0; i--) {
                 const j = Math.floor(Math.random() * (i + 1));
                 [numbers[i], numbers[j]] = [numbers[j], numbers[i]];
@@ -539,7 +575,31 @@
             state.grid = numbers;
 
             renderGrid();
-            startTimer(Date.now()); // Using local time for simplicity visually
+            startTimer(Date.now());
+        }
+
+        // --- NEW: Ripple Effect Function ---
+        function createRipple(event, btn) {
+            const circle = document.createElement("span");
+            const diameter = Math.max(btn.clientWidth, btn.clientHeight);
+            const radius = diameter / 2;
+
+            const rect = btn.getBoundingClientRect();
+            // Handle both touch and mouse events
+            const clientX = event.touches ? event.touches[0].clientX : event.clientX;
+            const clientY = event.touches ? event.touches[0].clientY : event.clientY;
+
+            if (clientX && clientY) {
+                circle.style.width = circle.style.height = `${diameter}px`;
+                circle.style.left = `${clientX - rect.left - radius}px`;
+                circle.style.top = `${clientY - rect.top - radius}px`;
+                circle.classList.add("ripple");
+
+                const ripple = btn.getElementsByClassName("ripple")[0];
+                if (ripple) ripple.remove();
+
+                btn.appendChild(circle);
+            }
         }
 
         function renderGrid() {
@@ -548,16 +608,14 @@
             
             state.grid.forEach((num, index) => {
                 const btn = document.createElement('button');
-                btn.className = 'game-tile bg-white/10 border border-white/20 rounded-xl h-24 flex items-center justify-center text-3xl font-bold cursor-pointer relative overflow-hidden';
-                btn.onclick = () => handleTileClick(btn, num, index);
+                btn.className = 'game-tile bg-white/10 border border-white/20 rounded-xl h-24 flex items-center justify-center text-3xl font-bold cursor-pointer relative';
+                // Pass event to handler
+                btn.onclick = (e) => handleTileClick(btn, num, index, e);
                 
-                // Front (Hidden)
                 const front = document.createElement('div');
                 front.className = 'absolute inset-0 flex items-center justify-center bg-gradient-to-br from-purple-900/80 to-blue-900/80';
                 front.innerHTML = `<span class="opacity-50 text-sm">?</span>`;
                 
-                // Back (Number) - initially hidden by CSS logic or just injected
-                // For simplicity in Vanilla JS without complex 3D CSS toggling classes manually:
                 btn.dataset.val = num;
                 btn.dataset.idx = index;
                 
@@ -565,60 +623,41 @@
             });
         }
 
-        function handleTileClick(btn, num, index) {
-            // Prevent clicking if already revealed or game over
+        function handleTileClick(btn, num, index, event) {
             if (btn.classList.contains('revealed')) return;
 
+            // Trigger ripple
+            createRipple(event, btn);
             sfx.click();
             
-            // Reveal animation
             btn.classList.add('revealed');
             
-            // Logic
             setTimeout(async () => {
                 if (num === state.target) {
-                    // Correct!
                     sfx.success();
                     btn.classList.add('correct');
-                    btn.innerText = num; // Show number
+                    btn.innerText = num;
                     state.target++;
                     document.getElementById('currentTarget').innerText = state.target;
-                    
-                    // Update Firebase
                     await updateProgress(state.target - 1);
-
-                    // Check Win
-                    if (state.target > state.maxTarget) {
-                        handleWin();
-                    }
-
+                    if (state.target > state.maxTarget) handleWin();
                 } else {
-                    // Wrong!
                     sfx.error();
                     btn.innerText = (num === -1) ? "💣" : num;
                     btn.classList.add('wrong');
-                    
-                    // Punishment: Reset
                     showToast("خطأ! العودة للصفر");
                     
                     setTimeout(async () => {
-                        // Reset local state
                         state.target = 1;
                         document.getElementById('currentTarget').innerText = 1;
-                        
-                        // Hide all tiles again
                         document.querySelectorAll('.game-tile').forEach(t => {
-                            t.className = 'game-tile bg-white/10 border border-white/20 rounded-xl h-24 flex items-center justify-center text-3xl font-bold cursor-pointer relative overflow-hidden';
+                            t.className = 'game-tile bg-white/10 border border-white/20 rounded-xl h-24 flex items-center justify-center text-3xl font-bold cursor-pointer relative';
                             t.innerText = '';
                             const front = document.createElement('div');
                             front.className = 'absolute inset-0 flex items-center justify-center bg-gradient-to-br from-purple-900/80 to-blue-900/80';
                             front.innerHTML = `<span class="opacity-50 text-sm">?</span>`;
                             t.appendChild(front);
                         });
-
-                        // Re-shuffle to prevent memorizing positions (Hardcore mode!)
-                        // For this version, let's NOT reshuffle, just hide, so memory helps.
-                        
                         await updateProgress(0);
                     }, 800);
                 }
@@ -634,11 +673,8 @@
 
         async function handleWin() {
             sfx.win();
-            // Confetti
             startConfetti();
-            
             const roomRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('rooms').doc(state.roomId);
-            // Set me as winner if no one else has won yet
             if (!state.room.winner) {
                 await roomRef.update({
                     status: 'FINISHED',
@@ -648,7 +684,6 @@
         }
 
         function renderGameStats(data) {
-            // Render progress bars sorted by score
             const players = Object.values(data.players).sort((a, b) => b.progress - a.progress);
             const list = document.getElementById('gameProgressList');
             
@@ -677,14 +712,10 @@
 
         function startTimer(startTime) {
             setInterval(() => {
-                // simple elapsed timer
-                // In a real app, calculate based on server start time
                 const now = Date.now();
-                // This is just visual for the user
             }, 1000);
         }
 
-        // --- 8. Confetti Effect (Simple) ---
         function startConfetti() {
             const canvas = document.getElementById('confetti');
             canvas.style.display = 'block';
